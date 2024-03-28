@@ -1,11 +1,14 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+import struct
 import socket
 import json
 from PIL import Image
 import io
 import tensorflow as tf
+
+# tf.get_logger().setLevel("ERROR")
 
 # Load TFLite model and allocate tensors.
 interpreter = tf.lite.Interpreter(model_path="lite_gesture_model.tflite")
@@ -19,12 +22,12 @@ UPPER_BODY_PARTS = [0, 7, 8, 11, 12, 13, 14, 15, 16]
 
 def preprocess_image(image_bytes):
     # Convert image bytes to OpenCV image
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    img = np.array(Image.open(io.BytesIO(image_bytes)).convert(mode="RGB"))
+    # img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW
 
     pose = mp_pose.Pose()
 
-    results = pose.process(frame)
+    results = pose.process(img)
     pose.close()
     del pose
 
@@ -33,12 +36,12 @@ def preprocess_image(image_bytes):
         temp = []
         for idx, landmark in enumerate(results.pose_landmarks.landmark):
             if idx in UPPER_BODY_PARTS:
-                h, w, c = frame.shape
+                h, w, c = img.shape
                 temp.append([landmark.x, landmark.y, landmark.z])
                 cx, cy = int(landmark.x * w), int(landmark.y * h)
-                cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
+                cv2.circle(img, (cx, cy), 5, (255, 0, 0), -1)
 
-        data = np.array(frame)
+        data = np.array(temp)
         center_x = data[:, 0].mean()
         center_y = data[:, 1].mean()
         center_z = data[:, 2].mean()
@@ -52,6 +55,9 @@ def preprocess_image(image_bytes):
 
 
 def predict_gesture(data):
+    # Allocate tensors
+    interpreter.allocate_tensors()
+
     # Process the image and predict gesture
     interpreter.set_tensor(
         input_details[0]["index"], data.reshape(1, 9, 3).astype(np.float32)
@@ -75,35 +81,49 @@ def predict_gesture(data):
     else:
         label = "None"
 
-    prediction_json = json.dumps({"gesture": label})
+    prediction_json = json.dumps({"prediction": [{"gesture": label}]})
 
     return prediction_json
 
 
-# Create a Unix domain socket server
-socket_path = "/tmp/gesturease.sock"
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(socket_path)
-server.listen(1)
+config = {
+    "process_id": "gesture",
+    "server_address": "/tmp/gesurease.sock",
+}
 
-print("Waiting for connection...")
 
-while True:
-    conn, _ = server.accept()
-    print("Connected.")
+def run():
+    data_len_bytes = sock.recv(4)
+    if len(data_len_bytes) == 0:
+        print("Connection closed, exiting...")
+        exit(1)
 
-    # Receive image data
-    image_bytes = conn.recv(1024)
-    if not image_bytes:
-        break
+    data_len = struct.unpack("!I", data_len_bytes)[0]
 
-    # Preprocess image
-    image = preprocess_image(image_bytes)
+    img = sock.recv(data_len)
+    while len(img) < data_len:
+        img += sock.recv(data_len - len(img))
 
-    # Predict gesture
-    gesture_prediction = predict_gesture(image)
+    # print(img)
 
-    # Send gesture prediction back to Rust
-    conn.sendall(gesture_prediction.encode())
+    data = preprocess_image(img)
+    gesture_prediction = (
+        predict_gesture(data)
+        if data is not None
+        else json.dumps({"prediction": [{"gesture": "None"}]})
+    )
 
-    conn.close()
+    sock.sendall(struct.pack("!I", len(gesture_prediction)))
+    sock.sendall(gesture_prediction.encode())
+
+
+if __name__ == "__main__":
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(config["server_address"])
+    sock.setblocking(True)
+
+    # Send the process identifier to the Rust server
+    sock.sendall(config["process_id"].encode())
+
+    while True:
+        run()
