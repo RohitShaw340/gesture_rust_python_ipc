@@ -47,11 +47,11 @@ def preprocess_image(image_bytes):
         data[:, 1] = (data[:, 1] - center_y) * 500  # Y coordinates
         data[:, 2] = (data[:, 2] - center_z) * 500  # Z coordinates
 
-        return data
+        return data, temp[0]
     return None
 
 
-def predict_gesture(data):
+def predict_gesture(data, nose):
     # Process the image and predict gesture
     interpreter.set_tensor(
         input_details[0]["index"], data.reshape(1, 9, 3).astype(np.float32)
@@ -75,7 +75,7 @@ def predict_gesture(data):
     else:
         label = "None"
 
-    prediction_json = json.dumps({"gesture": label})
+    prediction_json = json.dumps({"gesture": label, "x": nose[0], "y": nose[1]})
 
     return prediction_json
 
@@ -98,10 +98,10 @@ while True:
         break
 
     # Preprocess image
-    image = preprocess_image(image_bytes)
+    image, nose = preprocess_image(image_bytes)
 
     # Predict gesture
-    gesture_prediction = predict_gesture(image)
+    gesture_prediction = predict_gesture(image, nose)
 
     # Send gesture prediction back to Rust
     conn.sendall(gesture_prediction.encode())
