@@ -47,7 +47,8 @@ def preprocess_image(image_bytes):
         data[:, 1] = (data[:, 1] - center_y) * 500  # Y coordinates
         data[:, 2] = (data[:, 2] - center_z) * 500  # Z coordinates
 
-        return data, temp[0]
+        nose_coordianters = [temp[0][0] * w, temp[0][1] * h]
+        return data, nose_coordianters
     return None
 
 
