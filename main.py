@@ -51,10 +51,11 @@ options = vision.PoseLandmarkerOptions(
 detector = vision.PoseLandmarker.create_from_options(options)
 
 
-def preprocess_image(image_bytes):
+def preprocess_image(img, w, h):
     # Convert image bytes to OpenCV image
-    img = np.array(Image.open(io.BytesIO(image_bytes)).convert(mode="RGB"))
+    # img = np.array(Image.open(io.BytesIO(image_bytes)).convert(mode="RGB"))
     # img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW
+    img = np.frombuffer(img, np.uint8).reshape(3, h, w)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img)
     detector.detect_async(mp_image, time.time_ns() // 1_000_000)
     nose_coords = []
@@ -118,11 +119,15 @@ config = {
 
 
 def run():
+    img_width_bytes = sock.recv(4)
+    img_height_bytes = sock.recv(4)
     data_len_bytes = sock.recv(4)
     if len(data_len_bytes) == 0:
         print("Connection closed, exiting...")
         exit(1)
 
+    img_width = struct.unpack("!I", img_width_bytes)[0]
+    img_height = struct.unpack("!I", img_height_bytes)[0]
     data_len = struct.unpack("!I", data_len_bytes)[0]
 
     img = sock.recv(data_len)
@@ -130,7 +135,9 @@ def run():
         img += sock.recv(data_len - len(img))
 
     # print(img)
-    key_points_multiple_person, nose_coords = preprocess_image(img)
+    key_points_multiple_person, nose_coords = preprocess_image(
+        img, img_width, img_height
+    )
 
     if key_points_multiple_person is not None:
         gesture_prediction = []
