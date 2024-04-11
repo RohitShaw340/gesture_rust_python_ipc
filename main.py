@@ -3,7 +3,6 @@ import socket
 import mediapipe as mp
 import numpy as np
 import io
-from PIL import Image
 import struct
 import json
 
@@ -12,9 +11,9 @@ from mediapipe.tasks.python import vision
 from mediapipe.framework.formats import landmark_pb2
 
 import tensorflow as tf
+import cv2
 
-
-# tf.get_logger().setLevel("ERROR")
+DETECTION_RESULT = None
 
 # Load TFLite model and allocate tensors.
 interpreter = tf.lite.Interpreter(model_path="lite_gesture_model.tflite")
@@ -23,6 +22,7 @@ label_map = np.load("lable_map.npy", allow_pickle=True).item()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
+DETECTION_RESULT = None
 UPPER_BODY_PARTS = [0, 7, 8, 11, 12, 13, 14, 15, 16]
 interpreter.allocate_tensors()
 
@@ -52,10 +52,11 @@ detector = vision.PoseLandmarker.create_from_options(options)
 
 
 def preprocess_image(img, w, h):
+    global DETECTION_RESULT
     # Convert image bytes to OpenCV image
     # img = np.array(Image.open(io.BytesIO(image_bytes)).convert(mode="RGB"))
     # img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW
-    img = np.frombuffer(img, np.uint8).reshape(3, h, w)
+    img = np.frombuffer(img, np.uint8).reshape(h, w, 3)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img)
     detector.detect_async(mp_image, time.time_ns() // 1_000_000)
     nose_coords = []
@@ -69,7 +70,7 @@ def preprocess_image(img, w, h):
                     temp.append([landmark.x, landmark.y, landmark.z])
                     # cx, cy = int(landmark.x * w), int(landmark.y * h)
                     # cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
-            nose_coords.append(temp[0])
+            nose_coords.append((temp[0][0]*w,temp[0][1]*h))
             data = np.array(temp)
             center_x = data[:, 0].mean()
             center_y = data[:, 1].mean()
@@ -82,7 +83,7 @@ def preprocess_image(img, w, h):
         keypoints = np.array(keypoints)
         return keypoints, nose_coords
 
-    return None
+    return None,None
 
 
 def predict_gesture(data):
@@ -148,16 +149,16 @@ def run():
             dict = {"gesture": i[0], "nose_x": i[1][0], "nose_y": i[1][1]}
             json_data.append(dict)
 
-        json_response = {"prediction": json_data}
+        json_response = json.dumps({"prediction": json_data})
         sock.sendall(struct.pack("!I", len(json_response)))
         sock.sendall(json_response.encode())
     else:
         gesture_prediction = json.dumps(
-            {"prediction": [{"gesture": "None", "nose_x": "None", "nose_y": "None"}]}
+            {"prediction": [{"gesture": "None", "nose_x": 0.0, "nose_y": 0.0}]}
         )
         sock.sendall(struct.pack("!I", len(gesture_prediction)))
         sock.sendall(gesture_prediction.encode())
-
+    time.sleep(0.1)
 
 if __name__ == "__main__":
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
